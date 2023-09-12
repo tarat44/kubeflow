@@ -3,6 +3,8 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
 	"reflect"
 	"testing"
 
@@ -197,4 +199,53 @@ func createMockReconciler() *ProfileReconciler {
 		DefaultNamespaceLabelsPath: "dummy",
 	}
 	return reconciler
+}
+
+type readDefaultLabelsFromFileSuite struct {
+	name           string
+	files          map[string]string
+	expectedLabels map[string]string
+	path           string
+}
+
+func TestReadDefaultLabelsFromFile(t *testing.T) {
+	tests := []readDefaultLabelsFromFileSuite{
+		{
+			name: "single",
+			files: map[string]string{
+				"single-file.yaml": "test-key: test-value",
+			},
+			expectedLabels: map[string]string{
+				"test-key": "test-value",
+			},
+			path: "single-file.yaml",
+		},
+		{
+			name: "multiple",
+			files: map[string]string{
+				"multiple-files/file1.yaml": "test-key1: test-value1",
+				"multiple-files/file2.yaml": "test-key2: test-value2",
+			},
+			expectedLabels: map[string]string{
+				"test-key1": "test-value1",
+				"test-key2": "test-value2",
+			},
+			path: "multiple-files",
+		},
+	}
+	for _, test := range tests {
+		for name, content := range test.files {
+			fullPath := path.Join(test.name, name)
+			dir, _ := path.Split(fullPath)
+			err := os.MkdirAll(dir, 0700)
+			defer os.RemoveAll(test.name)
+			assert.Nil(t, err)
+			err = os.WriteFile(fullPath, []byte(content), 0700)
+			defer os.Remove(fullPath)
+			assert.Nil(t, err)
+		}
+		labels, err := createMockReconciler().readDefaultLabelsFromFile(path.Join(test.name, test.path))
+		assert.Equal(t, err, nil)
+		assert.Equal(t, test.expectedLabels, labels, "Expect:\n%v; Output:\n%v")
+	}
 }

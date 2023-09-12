@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"reflect"
 	"time"
 
@@ -104,12 +105,15 @@ type ProfileReconciler struct {
 // Automatically generate RBAC rules to allow the Controller to read and write Deployments
 func (r *ProfileReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("profile", request.NamespacedName)
-	defaultKubeflowNamespaceLabels := r.readDefaultLabelsFromFile(r.DefaultNamespaceLabelsPath)
-
+	defaultKubeflowNamespaceLabels, err := r.readDefaultLabelsFromFile(r.DefaultNamespaceLabelsPath)
+	if err != nil {
+		logger.Error(err, "error obtaining default labels")
+		os.Exit(1)
+	}
 	// Fetch the Profile instance
 	instance := &profilev1.Profile{}
 	logger.Info("Start to Reconcile.", "namespace", request.Namespace, "name", request.Name)
-	err := r.Get(ctx, request.NamespacedName, instance)
+	err = r.Get(ctx, request.NamespacedName, instance)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
@@ -766,19 +770,42 @@ func setNamespaceLabels(ns *corev1.Namespace, newLabels map[string]string) {
 	}
 }
 
-func (r *ProfileReconciler) readDefaultLabelsFromFile(path string) map[string]string {
-	logger := r.Log.WithName("read-config-file").WithValues("path", path)
-	dat, err := ioutil.ReadFile(path)
+func (r *ProfileReconciler) readDefaultLabelsFromFile(labelPath string) (map[string]string, error) {
+	logger := r.Log.WithName("read-config-file").WithValues("path", labelPath)
+	info, err := os.Lstat(labelPath)
 	if err != nil {
-		logger.Error(err, "namespace labels properties file doesn't exist")
-		os.Exit(1)
+		logger.Error(err, "unable to read default namespace labels from path %s", labelPath)
+		return nil, err
 	}
-
-	labels := map[string]string{}
-	err = yaml.Unmarshal(dat, &labels)
-	if err != nil {
-		logger.Error(err, "Unable to parse default namespace labels.")
-		os.Exit(1)
+	allLabels := map[string]string{}
+	var files []string
+	if info.IsDir() {
+		dirEntries, err := os.ReadDir(labelPath)
+		if err != nil {
+			logger.Error(err, "unable to read default namespace labels from directory %s", labelPath)
+			return nil, err
+		}
+		for _, dirEntry := range dirEntries {
+			files = append(files, path.Join(labelPath, dirEntry.Name()))
+		}
+	} else {
+		files = append(files, labelPath)
 	}
-	return labels
+	for _, file := range files {
+		dat, err := ioutil.ReadFile(file)
+		if err != nil {
+			logger.Error(err, "unable to read default namespace labels file %s", file)
+			return nil, err
+		}
+		labels := map[string]string{}
+		err = yaml.Unmarshal(dat, &labels)
+		if err != nil {
+			logger.Error(err, "unable to parse default namespace labels file %s.", file)
+			return nil, err
+		}
+		for labelKey, labelVal := range labels {
+			allLabels[labelKey] = labelVal
+		}
+	}
+	return allLabels, nil
 }
